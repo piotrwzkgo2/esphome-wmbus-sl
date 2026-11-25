@@ -1,5 +1,11 @@
 #pragma once
-
+  
+#include driver/gpio.h
+#include driver/spi_master.h
+#include esp_timer.h
+#include freertos/FreeRTOS.h
+#include freertos/task.h
+  
 #include "esphome/core/log.h"
 
 #include "mbus.h"
@@ -11,7 +17,7 @@
 #include <string>
 #include <stdint.h>
 
-#include <ELECHOUSE_CC1101_SRC_DRV.h>
+//#include <ELECHOUSE_CC1101_SRC_DRV.h>
 
 
 // CC1101 state machine
@@ -84,7 +90,19 @@ namespace wmbus {
       bool task();
       WMbusFrame get_frame();
 
-    private:
+     private:
+  spi_device_handle_t spi_dev_{nullptr};
+  bool spi_initialized_{false};
+  bool init_spi(uint8_t mosi, uint8_t miso, uint8_t clk, uint8_t cs);
+  void spi_write_reg(uint8_t addr, uint8_t val);
+  uint8_t spi_read_reg(uint8_t addr);
+  uint8_t spi_read_status(uint8_t addr);
+  void spi_read_burst(uint8_t addr, uint8_t *buf, uint8_t len);
+  void spi_strobe(uint8_t cmd);
+  int8_t read_rssi_dbm_();
+  uint8_t read_lqi_();
+
+
       bool start(bool force = true);
 
       bool syncMode{false};
@@ -94,6 +112,8 @@ namespace wmbus {
 
       WMbusData data_in{0}; // Data from Physical layer decoded to bytes
       WMbusFrame returnFrame;
+      
+      
 
       RxLoopData rxLoop;
 
