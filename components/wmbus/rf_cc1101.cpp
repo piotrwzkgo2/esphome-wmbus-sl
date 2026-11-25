@@ -52,137 +52,136 @@ namespace wmbus {
     return retVal;
   }
 
-  bool RxLoop::task() {
-    do {
-      switch (rxLoop.state) {
-        case INIT_RX:
-          start();
-          return false;
+ bool RxLoop::task() {
+  do {
+    switch (rxLoop.state) {
+      case INIT_RX:
+        start();
+        return false;
 
-        // RX active, waiting for SYNC
-        case WAIT_FOR_SYNC:
-          if (digitalRead(this->gdo2)) { // assert when SYNC detected
-            rxLoop.state = WAIT_FOR_DATA;
-            sync_time_ = millis();
-          }
-          break;
+      // RX active, waiting for SYNC
+      case WAIT_FOR_SYNC:
+        if (read_pin_(this->gdo2)) {  // assert when SYNC detected
+          rxLoop.state = WAIT_FOR_DATA;
+          sync_time_ = now_ms_();
+        }
+        break;
 
-        // waiting for enough data in Rx FIFO buffer
-        case WAIT_FOR_DATA:
-          if (digitalRead(this->gdo0)) { // assert when Rx FIFO buffer threshold reached
-            uint8_t preamble[2];
-            // Read the 3 first bytes,
-            ELECHOUSE_cc1101.SpiReadBurstReg(CC1101_RXFIFO, rxLoop.pByteIndex, 3);
-            rxLoop.bytesRx = 3;
-            const uint8_t *currentByte = rxLoop.pByteIndex;
-            // Mode C
-            if (*currentByte == WMBUS_MODE_C_PREAMBLE) {
+      // waiting for enough data in RX FIFO buffer
+      case WAIT_FOR_DATA:
+        if (read_pin_(this->gdo0)) {  // assert when RX FIFO buffer threshold reached
+          uint8_t preamble[2];
+          // Read the 3 first bytes.
+          this->spi_read_burst(0x3F, rxLoop.pByteIndex, 3);
+          rxLoop.bytesRx += 3;
+          const uint8_t *currentByte = rxLoop.pByteIndex;
+          // Mode T
+          if (*currentByte == WMBUS_MODE_T_PREAMBLE) {
+            currentByte++;
+            data_in.mode = 'T';
+            // Block A
+            if (*currentByte == WMBUS_BLOCK_A_PREAMBLE) {
               currentByte++;
-              data_in.mode = 'C';
-              // Block A
-              if (*currentByte == WMBUS_BLOCK_A_PREAMBLE) {
-                currentByte++;
-                rxLoop.lengthField = *currentByte;
-                rxLoop.length = 2 + packetSize(rxLoop.lengthField);
-                data_in.block = 'A';
-              }
-              // Block B
-              else if (*currentByte == WMBUS_BLOCK_B_PREAMBLE) {
-                currentByte++;
-                rxLoop.lengthField = *currentByte;
-                rxLoop.length = 2 + 1 + rxLoop.lengthField;
-                data_in.block = 'B';
-              }
-              // Unknown type, reinit loop
-              else {
-                rxLoop.state = INIT_RX;
-                return false;
-              }
-              // don't include C "preamble"
-              *(rxLoop.pByteIndex) = rxLoop.lengthField;
-              rxLoop.pByteIndex += 1;
+              rxLoop.lengthField = *currentByte;
+              rxLoop.length = 2 + packetSize(rxLoop.lengthField);
+              data_in.block = 'A';
             }
-            // Mode T Block A
-            else if (decode3OutOf6(rxLoop.pByteIndex, preamble)) {
-              rxLoop.lengthField  = preamble[0];
-              data_in.lengthField = rxLoop.lengthField;
-              rxLoop.length  = byteSize(packetSize(rxLoop.lengthField));
-              data_in.mode   = 'T';
-              data_in.block  = 'A';
-              rxLoop.pByteIndex += 3;
+            // Block B
+            else if (*currentByte == WMBUS_BLOCK_B_PREAMBLE) {
+              currentByte++;
+              rxLoop.lengthField = *currentByte;
+              rxLoop.length = 2 + 1 + rxLoop.lengthField;
+              data_in.block = 'B';
             }
-            // Unknown mode, reinit loop
+            // Unknown type, reinit loop
             else {
               rxLoop.state = INIT_RX;
               return false;
             }
-
-            rxLoop.bytesLeft = rxLoop.length - 3;
-
-            if (rxLoop.length < MAX_FIXED_LENGTH) {
-              // Set CC1101 into length mode
-              ELECHOUSE_cc1101.SpiWriteReg(CC1101_PKTLEN, (uint8_t)rxLoop.length);
-              ELECHOUSE_cc1101.SpiWriteReg(CC1101_PKTCTRL0, FIXED_PACKET_LENGTH);
-              rxLoop.cc1101Mode = FIXED;
-            }
-            else {
-              // Set CC1101 into infinite mode
-              ELECHOUSE_cc1101.SpiWriteReg(CC1101_PKTLEN, (uint8_t)(rxLoop.length%MAX_FIXED_LENGTH));
-            }
-
-            rxLoop.state = READ_DATA;
-            max_wait_time_ += extra_time_;
-
-            ELECHOUSE_cc1101.SpiWriteReg(CC1101_FIFOTHR, RX_FIFO_THRESHOLD);
+            // don't include c "preamble"
+            *(rxLoop.pByteIndex) = rxLoop.lengthField;
+            rxLoop.pByteIndex += 1;
           }
-          break;
-
-        // waiting for more data in Rx FIFO buffer
-        case READ_DATA:
-          if (digitalRead(this->gdo0)) { // assert when Rx FIFO buffer threshold reached
-            if ((rxLoop.bytesLeft < MAX_FIXED_LENGTH) && (rxLoop.cc1101Mode == INFINITE)) {
-              ELECHOUSE_cc1101.SpiWriteReg(CC1101_PKTCTRL0, FIXED_PACKET_LENGTH);
-              rxLoop.cc1101Mode = FIXED;
-            }
-            // Do not empty the Rx FIFO (See the CC1101 SWRZ020E errata note)
-            uint8_t bytesInFIFO = ELECHOUSE_cc1101.SpiReadStatus(CC1101_RXBYTES) & 0x7F;
-            ELECHOUSE_cc1101.SpiReadBurstReg(CC1101_RXFIFO, rxLoop.pByteIndex, bytesInFIFO - 1);
-
-            rxLoop.bytesLeft  -= (bytesInFIFO - 1);
-            rxLoop.pByteIndex += (bytesInFIFO - 1);
-            rxLoop.bytesRx    += (bytesInFIFO - 1);
-            max_wait_time_    += extra_time_;
+          // Mode T Block A
+          else if (decode3OutOf6(rxLoop.pByteIndex, preamble)) {
+            rxLoop.lengthField = preamble[0];
+            data_in.lengthField = rxLoop.lengthField;
+            rxLoop.length = byteSize(packetSize(rxLoop.lengthField));
+            data_in.mode = 'T';
+            data_in.block = 'A';
+            rxLoop.pByteIndex += 3;
           }
-          break;
+          // Unknown mode, reinit loop
+          else {
+            rxLoop.state = INIT_RX;
+            return false;
+          }
+
+          rxLoop.bytesLeft = rxLoop.length - 3;
+
+          if (rxLoop.length < MAX_FIXED_LENGTH) {
+            // Set CC1101 into fixed length mode
+            this->spi_write_reg(0x06, (uint8_t)rxLoop.length);          // PKTLEN
+            this->spi_write_reg(0x08, FIXED_PACKET_LENGTH);            // PKTCTRL0
+            rxLoop.cc1101Mode = FIXED;
+          } else {
+            // Set CC1101 into infinite mode
+            this->spi_write_reg(0x06, (uint8_t)(rxLoop.length - MAX_FIXED_LENGTH));  // PKTLEN
+          }
+
+          rxLoop.state = READ_DATA;
+          max_wait_time_ = extra_time_;
+
+          this->spi_write_reg(0x03, RX_FIFO_THRESHOLD);  // FIFOTHR
+        }
+        break;
+
+      // waiting for more data in Rx FIFO buffer
+      case READ_DATA:
+        if (read_pin_(this->gdo0)) {  // assert when Rx FIFO buffer threshold reached
+          if ((rxLoop.bytesLeft < MAX_FIXED_LENGTH) && (rxLoop.cc1101Mode == INFINITE)) {
+            this->spi_write_reg(0x08, FIXED_PACKET_LENGTH);  // PKTCTRL0
+            rxLoop.cc1101Mode = FIXED;
+          }
+          // Do not empty the Rx FIFO (see the CC1101 SWRZ020F errata note)
+          uint8_t bytesInFIFO = this->spi_read_status(0x3B) & 0x7F;  // RXBYTES
+          this->spi_read_burst(0x3F, rxLoop.pByteIndex, bytesInFIFO - 1);
+
+          rxLoop.bytesLeft -= (bytesInFIFO - 1);
+          rxLoop.pByteIndex += (bytesInFIFO - 1);
+          rxLoop.bytesRx += (bytesInFIFO - 1);
+          max_wait_time_ = extra_time_;
+        }
+        break;
       }
 
-      uint8_t overfl = ELECHOUSE_cc1101.SpiReadStatus(CC1101_RXBYTES) & 0x80;
-      // end of packet in length mode
-      if ((!overfl) && (!digitalRead(gdo2))  && (rxLoop.state > WAIT_FOR_DATA)) {
-        ELECHOUSE_cc1101.SpiReadBurstReg(CC1101_RXFIFO, rxLoop.pByteIndex, (uint8_t)rxLoop.bytesLeft);
-        rxLoop.bytesRx += rxLoop.bytesLeft;
-        data_in.length  = rxLoop.bytesRx;
-        this->returnFrame.rssi  = (int8_t)ELECHOUSE_cc1101.getRssi();
-        this->returnFrame.lqi   = (uint8_t)ELECHOUSE_cc1101.getLqi();
-        ESP_LOGV(TAG, "Have %d bytes from CC1101 Rx, RSSI: %d dBm LQI: %d", rxLoop.bytesRx, this->returnFrame.rssi, this->returnFrame.lqi);
-        if (rxLoop.length != data_in.length) {
-          ESP_LOGE(TAG, "Length problem: req(%d) != rx(%d)", rxLoop.length, data_in.length);
-        }
-        if (this->syncMode) {
-          ESP_LOGV(TAG, "Synchronus mode enabled.");
-        }
-        if (mBusDecode(data_in, this->returnFrame)) {
-          rxLoop.complete = true;
-          this->returnFrame.mode  = data_in.mode;
-          this->returnFrame.block = data_in.block;
-        }
-        rxLoop.state = INIT_RX;
-        return rxLoop.complete;
+      uint8_t overfl = this->spi_read_status(0x3B) & 0x80;
+    // end of packet in length mode
+    if (((overfl) && (!read_pin_(this->gdo2))) && (rxLoop.state > WAIT_FOR_DATA)) {
+      this->spi_read_burst(0x3F, rxLoop.pByteIndex, (uint8_t)rxLoop.bytesLeft);
+      rxLoop.bytesRx += rxLoop.bytesLeft;
+      data_in.length = rxLoop.bytesRx;
+      this->returnFrame.rssi = this->read_rssi_dbm_();
+      this->returnFrame.lqi = this->read_lqi_();
+      ESP_LOGV(TAG, "Have %d bytes from CC1101 Rx, RSSI: %d dBm LQI: %d", rxLoop.bytesRx, this->returnFrame.rssi, this->returnFrame.lqi);
+      if (rxLoop.length != data_in.length) {
+        ESP_LOGE(TAG, "Length problem: req(%d) != rx(%d)", rxLoop.length, data_in.length);
       }
-      start(false);
-    } while ((this->syncMode) && (rxLoop.state > WAIT_FOR_SYNC));
-    return rxLoop.complete;
-  }
+      if (this->syncMode) {
+        ESP_LOGV(TAG, "Synchronus mode enabled.");
+      }
+      if (wMbusDecode(data_in, this->returnFrame)) {
+        rxLoop.complete = true;
+        this->returnFrame.mode = data_in.mode;
+        this->returnFrame.block = data_in.block;
+      }
+      rxLoop.state = INIT_RX;
+      return rxLoop.complete;
+    }
+    start(false);
+  } while ((this->syncMode) && (rxLoop.state > WAIT_FOR_SYNC));
+  return rxLoop.complete;
+}
 
   WMbusFrame RxLoop::get_frame() {
     return this->returnFrame;
