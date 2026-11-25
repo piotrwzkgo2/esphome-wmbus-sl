@@ -188,59 +188,65 @@ namespace wmbus {
     return this->returnFrame;
   }
 
-  bool RxLoop::start(bool force) {
-    // waiting to long for next part of data?
-    bool reinit_needed = ((millis() - sync_time_) > max_wait_time_) ? true: false;
-    if (!force) {
-      if (!reinit_needed) {
-        // already in RX?
-        if (ELECHOUSE_cc1101.SpiReadStatus(CC1101_MARCSTATE) == MARCSTATE_RX) {
-          return false;
-        }
+bool RxLoop::start(bool force) {
+  // waiting too long for next part of data?
+  bool reinit_needed = ((now_ms_() - this->sync_time_) > this->max_wait_time_) ? true : false;
+  if (!force) {
+    if (!reinit_needed) {
+      // already in RX?
+      if (this->spi_read_status(0x35) == MARCSTATE_RX) {  // MARCSTATE
+        return false;
       }
     }
-    // init RX here, each time we're idle
-    rxLoop.state = INIT_RX;
-    sync_time_ = millis();
-    max_wait_time_ = extra_time_;
+  }
 
-    ELECHOUSE_cc1101.SpiStrobe(CC1101_SIDLE);
-    while((ELECHOUSE_cc1101.SpiReadStatus(CC1101_MARCSTATE) != MARCSTATE_IDLE));
-    ELECHOUSE_cc1101.SpiStrobe(CC1101_SFTX);  //flush Tx FIFO
-    ELECHOUSE_cc1101.SpiStrobe(CC1101_SFRX);  //flush Rx FIFO
+  // init RX here, each time we're idle
+  this->rxLoop.state = INIT_RX;
+  this->sync_time_ = now_ms_();
+  this->max_wait_time_ = this->extra_time_;
 
-    // Initialize RX info variable
-    rxLoop.lengthField = 0;              // Length Field in the wM-Bus packet
-    rxLoop.length      = 0;              // Total length of bytes to receive packet
-    rxLoop.bytesLeft   = 0;              // Bytes left to to be read from the Rx FIFO
-    rxLoop.bytesRx     = 0;              // Bytes read from Rx FIFO
-    rxLoop.pByteIndex  = data_in.data;   // Pointer to current position in the byte array
-    rxLoop.complete    = false;          // Packet received
-    rxLoop.cc1101Mode  = INFINITE;       // Infinite or fixed CC1101 packet mode
+  this->spi_strobe(0x36);  // SIDLE
+  while ((this->spi_read_status(0x35) & 0x1F) != MARCSTATE_IDLE) {
+    delay_ms_(1);
+  }
+  this->spi_strobe(0x3B);  // SFTX - flush Tx FIFO
+  this->spi_strobe(0x3A);  // SFRX - flush Rx FIFO
 
-    this->returnFrame.frame.clear();
-    this->returnFrame.rssi  = 0;
-    this->returnFrame.lqi   = 0;
-    this->returnFrame.mode  = 'X';
-    this->returnFrame.block = 'X';
+  // Initialize RX info variable
+  this->rxLoop.lengthField = 0;
+  this->rxLoop.length = 0;
+  this->rxLoop.bytesLeft = 0;
+  this->rxLoop.bytesRx = 0;
+  this->rxLoop.pByteIndex = this->data_in.data;
+  this->rxLoop.complete = false;
+  this->rxLoop.cc1101Mode = INFINITE;
 
-    std::fill( std::begin( data_in.data ), std::end( data_in.data ), 0 );
-    data_in.length      = 0;
-    data_in.lengthField = 0;
-    data_in.mode        = 'X';
-    data_in.block       = 'X';
+  this->returnFrame.frame.clear();
+  this->returnFrame.rssi = 0;
+  this->returnFrame.lqi = 0;
+  this->returnFrame.mode = 'x';
+  this->returnFrame.block = 'x';
 
-    // Set Rx FIFO threshold to 4 bytes
-    ELECHOUSE_cc1101.SpiWriteReg(CC1101_FIFOTHR, RX_FIFO_START_THRESHOLD);
-    // Set infinite length 
-    ELECHOUSE_cc1101.SpiWriteReg(CC1101_PKTCTRL0, INFINITE_PACKET_LENGTH);
+  std::fill(std::begin(this->data_in.data), std::end(this->data_in.data), 0);
+  this->data_in.length = 0;
+  this->data_in.lengthField = 0;
+  this->data_in.mode = 'x';
+  this->data_in.block = 'x';
 
-    ELECHOUSE_cc1101.SpiStrobe(CC1101_SRX);
-    while((ELECHOUSE_cc1101.SpiReadStatus(CC1101_MARCSTATE) != MARCSTATE_RX));
+  // Set Rx FIFO threshold
+  this->spi_write_reg(0x03, RX_FIFO_START_THRESHOLD);  // FIFOTHR
+  // Set infinite length
+  this->spi_write_reg(0x08, INFINITE_PACKET_LENGTH);   // PKTCTRL0
 
-    rxLoop.state = WAIT_FOR_SYNC;
+  this->spi_strobe(0x34);  // SRX
+  while ((this->spi_read_status(0x35) & 0x1F) != MARCSTATE_RX) {
+    delay_ms_(1);
+  }
 
-    return true; // this will indicate we just have re-started Rx
+  this->rxLoop.state = WAIT_FOR_SYNC;
+
+  return true;  // this will indicate we just have re-started Rx
+}
   }
 
 }
